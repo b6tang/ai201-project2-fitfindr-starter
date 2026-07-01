@@ -30,7 +30,7 @@ If no listing matches, the tool returns `[]` rather than raising an exception. T
 ### Tool 2: suggest_outfit
 
 **What it does:**
-Uses the selected listing and the user's wardrobe to generate one or two complete outfit suggestions. When wardrobe items are available, the suggestions name compatible pieces from that wardrobe.
+Uses the selected listing and the user's wardrobe to generate one or two complete outfit suggestions. When wardrobe items are available, the suggestions name compatible pieces from that wardrobe. It calls Groq's `llama-3.3-70b-versatile` model with the selected listing and wardrobe details.
 
 **Input parameters:**
 - `new_item` (dict): The single listing selected by the agent from `search_results`, usually the top result (`search_results[0]`).
@@ -47,7 +47,7 @@ An empty wardrobe is treated as a normal case rather than an error. In that case
 ### Tool 3: create_fit_card
 
 **What it does:**
-Uses the outfit suggestion and selected listing to generate a short, casual caption suitable for an Instagram or TikTok outfit post. The caption should sound like an OOTD post rather than a product description.
+Uses the outfit suggestion and selected listing to generate a short, casual caption suitable for an Instagram or TikTok outfit post. The caption should sound like an OOTD post rather than a product description. It calls Groq's `llama-3.3-70b-versatile` model with the selected listing and outfit suggestion.
 
 **Input parameters:**
 - `outfit` (str): The non-empty outfit suggestion returned by `suggest_outfit`.
@@ -97,7 +97,7 @@ For each tool, describe the specific failure mode you're handling and what the a
 |------|-------------|----------------|
 | search_listings | No results match the query | The tool returns `[]`. The agent sets `session["error"]` to a message such as: “No listings found. Try different keywords, a different size, or a higher budget.” It returns early and does not call the later tools. |
 | suggest_outfit | Wardrobe is empty | The tool does not fail or stop the workflow. It returns general styling advice for the selected item instead of naming existing wardrobe pieces. The agent stores that advice in `session["outfit_suggestion"]`, continues to `create_fit_card`, and can tell the user to add wardrobe items later for more personalized suggestions. |
-| create_fit_card | Outfit input is empty or whitespace-only | The tool returns a descriptive error string instead of crashing. The agent displays a message such as: “A fit card could not be created because the outfit suggestion is missing. Generate an outfit suggestion first, then try again.” It does not present an incomplete caption as a successful fit card. |
+| create_fit_card | Outfit input is empty or whitespace-only | The tool returns a descriptive error string instead of crashing. This should not occur in the normal agent flow because `suggest_outfit` returns a non-empty fallback message. If it does occur, `run_agent()` stores the returned string in `session["fit_card"]`, and the interface displays it in the third panel. |
 
 ---
 
@@ -188,9 +188,13 @@ FitFindr reads a user's clothing request and calls `search_listings` to find lis
 
 **Step 1:**
 <!-- What does the agent do first? Which tool is called? With what input? -->
-The agent extracts `description="vintage graphic tee"`, `size=None`, and `max_price=30.0` from the query. It calls:
+For this minimal regex parser, the agent extracts `size=None` and `max_price=30.0` from the query. It removes the matched price phrase but does not semantically remove the remaining conversational wording, so `description` is the remaining trimmed query text:
 
-`search_listings(description="vintage graphic tee", size=None, max_price=30.0)`
+`"I'm looking for a vintage graphic tee . I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it"`
+
+It calls:
+
+`search_listings(description=..., size=None, max_price=30.0)`
 
 The tool filters out listings over $30, scores the remaining listings by keyword relevance, and returns matching listing dictionaries sorted from most to least relevant. The agent saves the full list in `session["search_results"]`, selects the first result, and saves that exact listing dictionary in `session["selected_item"]`. If the returned list is empty, the agent stores a helpful error telling the user to try broader keywords or a higher budget, then returns immediately without calling the next two tools.
 
