@@ -62,9 +62,6 @@ If `outfit` is empty or contains only whitespace, the tool returns a descriptive
 ---
 
 ### Additional Tools (if any)
-
-<!-- Copy the block above for any tools beyond the required three -->
-
 ---
 
 ## Planning Loop
@@ -103,17 +100,6 @@ For each tool, describe the specific failure mode you're handling and what the a
 
 ## Architecture
 
-<!-- Draw a diagram of your agent showing how the components connect:
-     User input → Planning Loop → Tools (search_listings, suggest_outfit, create_fit_card)
-                                                                          ↕
-                                                                   State / Session
-     Show what triggers each tool, how state flows between them, and where error paths branch off.
-     Use ASCII art or a Mermaid diagram (https://mermaid.js.org/syntax/flowchart.html).
-     Do NOT embed an image — graders need to read your diagram directly in the file;
-     an embedded image or screenshot cannot be evaluated.
-     You'll share this diagram with an AI tool when asking it to implement
-     the planning loop and each individual tool. -->
-
 ```
 User query
     │
@@ -149,17 +135,6 @@ Planning Loop ──────────────────────
 
 ## AI Tool Plan
 
-<!-- For each part of the implementation below, describe:
-     - Which AI tool you plan to use (Claude, Copilot, ChatGPT, etc.)
-     - What you'll give it as input (which sections of this planning.md, your agent diagram)
-     - What you expect it to produce
-     - How you'll verify the output matches your spec before moving on
-
-     "I'll use AI to help me code" is not a plan.
-     "I'll give Claude my Tool 1 spec (inputs, return value, failure mode) and ask it to implement
-     search_listings() using load_listings() from the data loader — then test it against 3 queries
-     before trusting it" is a plan. -->
-
 **Milestone 3 — Individual tool implementations:**
 
 Claude Agent will generate the code one function at a time. Each prompt will include the matching Tool section from `planning.md`, the function signature and TODO in `tools.py`, and the relevant data source or schema. ChatGPT and other LLMs will mainly be used to explain the starter code and help check the logic.
@@ -187,7 +162,6 @@ FitFindr reads a user's clothing request and calls `search_listings` to find lis
 **Example user query:** "I'm looking for a vintage graphic tee under $30. I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it?"
 
 **Step 1:**
-<!-- What does the agent do first? Which tool is called? With what input? -->
 For this minimal regex parser, the agent extracts `size=None` and `max_price=30.0` from the query. It removes the matched price phrase but does not semantically remove the remaining conversational wording, so `description` is the remaining trimmed query text:
 
 `"I'm looking for a vintage graphic tee . I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it"`
@@ -200,7 +174,6 @@ The tool filters out listings over $30, scores the remaining listings by keyword
 
 
 **Step 2:**
-<!-- What happens next? What was returned from step 1? What tool is called now? -->
 Because a matching listing was found, the agent calls:
 
 `suggest_outfit(new_item=session["selected_item"], wardrobe=session["wardrobe"])`
@@ -208,14 +181,11 @@ Because a matching listing was found, the agent calls:
 For this interaction, `session["wardrobe"]` is the example wardrobe, which includes baggy straight-leg jeans and chunky white sneakers. The tool returns a non-empty outfit suggestion that pairs the selected graphic tee with specific wardrobe items, and the agent saves that text in `session["outfit_suggestion"]`.
 
 **Step 3:**
-<!-- Continue until the full interaction is complete -->
 The agent calls:
 
 `create_fit_card(outfit=session["outfit_suggestion"], new_item=session["selected_item"])`
 
 The tool uses the selected listing and outfit suggestion to return a short 2–4 sentence social-media-style caption. The agent saves that caption in `session["fit_card"]`.
 
-**Final output to user:**
-<!-- What does the user actually see at the end? -->
 **Final output to user:**  
 The interface shows the selected top listing in the first panel, including its title, size, condition, price, and platform. The second panel shows the outfit suggestion using the user’s wardrobe, and the third panel shows the generated fit card caption.
