@@ -18,9 +18,10 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import json
 import re
 
-from tools import search_listings, suggest_outfit, create_fit_card
+from tools import search_listings, suggest_outfit, create_fit_card, _get_groq_client
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -47,6 +48,93 @@ def _new_session(query: str, wardrobe: dict) -> dict:
     }
 
 
+# ── query parsing ─────────────────────────────────────────────────────────────
+
+def _fallback_parse_query(query: str) -> dict:
+    """Deterministic regex-based parser, used if the LLM parse fails or is invalid."""
+    working_text = query
+
+    price_match = re.search(r"under\s*\$(\d+(?:\.\d+)?)", working_text, re.IGNORECASE)
+    max_price = None
+    if price_match:
+        max_price = float(price_match.group(1))
+        working_text = working_text[: price_match.start()] + working_text[price_match.end() :]
+
+    size_match = re.search(r"(?:in\s+)?size\s+([A-Za-z0-9/.\-]+)", working_text, re.IGNORECASE)
+    size = None
+    if size_match:
+        size = size_match.group(1)
+        working_text = working_text[: size_match.start()] + working_text[size_match.end() :]
+
+    leading_phrases = r"^(?:i'?m\s+looking\s+for|looking\s+for|find\s+me|show\s+me)\s+(?:a|an|the)?\s*"
+    working_text = re.sub(leading_phrases, "", working_text.strip(), flags=re.IGNORECASE)
+
+    trailing_clauses = (
+        r"\b(?:i\s+mostly\s+wear|i\s+usually\s+wear|my\s+wardrobe|"
+        r"what'?s\s+out\s+there|how\s+would\s+i\s+style).*$"
+    )
+    working_text = re.sub(trailing_clauses, "", working_text, flags=re.IGNORECASE | re.DOTALL)
+
+    description = re.sub(r"\s+", " ", working_text).strip(" \t\n.,;:!?-")
+
+    return {
+        "description": description,
+        "size": size,
+        "max_price": max_price,
+    }
+
+
+def _parse_query(query: str) -> dict:
+    """
+    Extract description, size, and max_price from a natural-language query
+    using an LLM, falling back to a deterministic regex parser on any failure.
+    """
+    prompt = (
+        "Extract search filters from this clothing shopping request:\n\n"
+        f'"{query}"\n\n'
+        "Return a JSON object with exactly these keys:\n"
+        '- "description": string — only the clothing item the user wants to search for. '
+        "Do not include statements about what the user already owns, usually wears, "
+        "styling preferences, or follow-up questions.\n"
+        '- "size": the requested size for the item as a string, or null if not specified.\n'
+        '- "max_price": the requested maximum dollar amount as a number, or null if not specified.\n\n'
+        "Do not invent filters that are not present in the request. Return valid JSON only."
+    )
+
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content
+        parsed = json.loads(content)
+
+        description = parsed.get("description")
+        size = parsed.get("size")
+        max_price = parsed.get("max_price")
+
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("description must be a non-empty string")
+        if size is not None and not isinstance(size, str):
+            raise ValueError("size must be a string or null")
+        if max_price is not None and (
+            isinstance(max_price, bool)
+            or not isinstance(max_price, (int, float))
+        ):
+            raise ValueError("max_price must be a number or null")
+        
+        return {
+            "description": description.strip(),
+            "size": size,
+            "max_price": float(max_price) if max_price is not None else None,
+        }
+    except Exception:
+        return _fallback_parse_query(query)
+
+
 # ── planning loop ─────────────────────────────────────────────────────────────
 
 def run_agent(query: str, wardrobe: dict) -> dict:
@@ -68,27 +156,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     """
     session = _new_session(query, wardrobe)
 
-    working_text = query
-
-    price_match = re.search(r"under\s*\$(\d+(?:\.\d+)?)", working_text, re.IGNORECASE)
-    max_price = None
-    if price_match:
-        max_price = float(price_match.group(1))
-        working_text = working_text[: price_match.start()] + working_text[price_match.end() :]
-
-    size_match = re.search(r"(?:in\s+)?size\s+([A-Za-z0-9/.\-]+)", working_text, re.IGNORECASE)
-    size = None
-    if size_match:
-        size = size_match.group(1)
-        working_text = working_text[: size_match.start()] + working_text[size_match.end() :]
-
-    description = re.sub(r"\s+", " ", working_text).strip(" \t\n.,;:!?-")
-
-    session["parsed"] = {
-        "description": description,
-        "size": size,
-        "max_price": max_price,
-    }
+    session["parsed"] = _parse_query(query)
 
     session["search_results"] = search_listings(
         description=session["parsed"]["description"],
