@@ -12,7 +12,8 @@ ai201-project2-fitfindr-starter/
 │   ├── listings.json          # 40 mock secondhand listings
 │   └── wardrobe_schema.json   # Wardrobe format + example wardrobe
 ├── tests/
-│   └── test_tools.py          # Pytest coverage for tools and failure cases
+│   ├── test_agent.py          # Parser and planning-loop tests
+│   └── test_tools.py          # Tool tests and failure cases
 ├── utils/
 │   └── data_loader.py         # Helper functions for loading the data
 ├── .gitignore                 # Excludes local environment and secret files from Git
@@ -87,7 +88,7 @@ wardrobe = get_example_wardrobe()
 
 | Tool Name | Purpose | Parameters (Inputs) | Returns (Outputs) |
 |---|---|---|---|
-| `search_listings` | Searches the mock secondhand clothing listings for relevant items. | `description` (`str`): clothing keywords; `size` (`str \| None = None`): optional requested size; `max_price` (`float \| None = None`): optional inclusive maximum price. | A relevance-sorted `list[dict]` of matching listings. Each listing includes `id`, `title`, `description`, `category`, `style_tags`, `size`, `condition`, `price`, `colors`, `brand`, and `platform`. Returns `[]` when no listings match. |
+| `search_listings` | Searches the mock secondhand clothing listings for relevant items. | `description` (`str`): a short query phrase describing the item the user wants, such as `"vintage graphic tee"`; `size` (`str \| None = None`): optional requested size; `max_price` (`float \| None = None`): optional inclusive maximum price. | A relevance-sorted `list[dict]` of matching listings. Each listing includes `id`, `title`, `description`, `category`, `style_tags`, `size`, `condition`, `price`, `colors`, `brand`, and `platform`. Returns `[]` when no listings match. |
 | `suggest_outfit` | Generates outfit suggestions using a selected listing and the user's wardrobe. | `new_item` (`dict`): selected listing; `wardrobe` (`dict`): wardrobe containing an `items` list. | A non-empty outfit suggestion (`str`). With an empty wardrobe, it returns general styling advice. |
 | `create_fit_card` | Generates a short social-media-style caption for the selected item and outfit. | `outfit` (`str`): outfit suggestion; `new_item` (`dict`): selected listing. | A 2–4 sentence fit-card caption (`str`). If `outfit` is empty or whitespace-only, it returns a descriptive error string. |
 ---
@@ -97,33 +98,41 @@ wardrobe = get_example_wardrobe()
 ```mermaid
 graph TD
     A["User query"] --> B["Planning loop"]
-    B --> C["1. Parse query"]
-    C --> D["2. Search listings"]
 
-    D -->|"No results"| E["Save error"]
-    E --> N["Return session"]
+    B --> C["_parse_query(query)"]
+    C --> D["Groq JSON parsing"]
+    D -->|"Valid JSON"| E["description, size, max_price"]
+    D -->|"Failure or invalid JSON"| F["Regex fallback parsing"]
+    F --> E
 
-    D -->|"Listings found"| F["Save results<br/>Select first item"]
-    F --> G
+    E --> G["search_listings(description, size, max_price)"]
+
+    G -->|"No results: []"| H["session['error'] = no-results message"]
+    H --> N["Return session early"]
+
+    G -->|"Listings found"| I["session['search_results'] = results<br/>session['selected_item'] = results[0]"]
+
+    I --> J["suggest_outfit(selected_item, wardrobe)"]
 
     subgraph S["suggest_outfit()"]
-        G["Item + wardrobe"] --> H{"Wardrobe empty?"}
-        H -->|"Yes"| I["General advice"]
-        H -->|"No"| J["Specific outfit"]
+        J --> K{"Wardrobe empty?"}
+        K -->|"Yes"| L["General styling advice"]
+        K -->|"No"| M["Specific outfit suggestions"]
     end
 
-    I --> K["Save outfit"]
-    J --> K
-    K --> L["4. Create fit card"]
-    L --> M["Save fit card"]
-    M --> N
+    L --> O["session['outfit_suggestion'] = suggestion"]
+    M --> O
+
+    O --> P["create_fit_card(outfit_suggestion, selected_item)"]
+    P --> Q["session['fit_card'] = caption"]
+    Q --> N["Return session"]
 ```
 
 ### 1. Query Parsing
 
-`run_agent()` begins by creating a new session dictionary. It uses regular expressions to extract a maximum price from phrases such as `under $30` and a size from phrases such as `size M` or `in size M`.
+`run_agent()` begins by creating a new session dictionary. It calls a private `_parse_query()` helper that uses Groq JSON parsing with a deterministic regex fallback.
 
-Missing size or price values are stored as `None`. After matched size and price phrases are removed, the remaining trimmed text becomes the search description stored in `session["parsed"]`.
+Missing size or price values are stored as `None`. The helper returns a dictionary with `description`, `size`, and `max_price`, which `run_agent()` stores in `session["parsed"]`. The regex fallback removes matched size and price phrases plus common request or wardrobe-context phrases before producing the description.
 
 ### 2. Item Search
 
@@ -158,10 +167,18 @@ The outputs below are from one tested run. Wording may vary because the outfit s
 **User query:**
 
 ```text
-vintage graphic tee under $30
+I'm looking for a vintage graphic tee under $30. I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it?
 ```
 
 **Step 1 — Tool called:**
+- Before calling a tool, `run_agent()` calls `_parse_query(query)`. For this request, the parser returns:
+  ```python
+  {
+      "description": "vintage graphic tee",
+      "size": None,
+      "max_price": 30.0,
+  }
+  ```
 - Tool: `search_listings`
 - Input: `search_listings(description="vintage graphic tee", size=None, max_price=30.0)`
 - Why this tool: The agent needs a matching listing before it can suggest an outfit or create a fit card.
@@ -216,7 +233,7 @@ The planning document defined the expected behavior of each tool before I implem
 
 **One divergence from your spec, and why:**
 
-The example walkthrough suggests extracting a short item phrase like vintage graphic tee from a longer request. My implementation only uses regular expressions to extract the size and price, and passes the rest of the text directly as the search description. This approach is simpler to implement and still meets the project requirements, although it may be less accurate for longer conversational requests.
+My initial spec used regex-only parsing for the user's description, size, and price. During testing, I found that a longer conversational request could leave wardrobe context in the search description and affect ranking. The final implementation instead uses Groq JSON parsing to isolate the requested item, with a deterministic regex fallback if the model call, JSON parsing, or validation fails.
 
 ---
 
@@ -233,5 +250,5 @@ The example walkthrough suggests extracting a short item phrase like vintage gra
 
 - **AI tool used:** Claude Agent
 - **Input provided:** I gave Claude the Planning Loop, State Management, Error Handling, and Architecture sections from `planning.md`, along with `agent.py` and `app.py`.
-- **What it generated:** Claude generated `run_agent()` with regex parsing, a no-results early return, and the Gradio `handle_query()` function that maps results to the three output panels.
-- **Review and verification:** I checked that the no-results branch stops before later tools run. I tested a normal query, `designer ballgown size XXS under $5`, a blank query, and an empty-wardrobe query through the interface. I also temporarily replaced the later tools with functions that would raise an error; the no-results path completed without calling them.
+- **What it generated:** Claude generated `run_agent()` with a private `_parse_query()` helper that uses Groq JSON parsing with a deterministic regex fallback, a no-results early return, and the Gradio `handle_query()` function that maps results to the three output panels.
+- **Review and verification:** I checked that the no-results branch stops before later tools run. I tested a normal query, `designer ballgown size XXS under $5`, a blank query, and an empty-wardrobe query through the interface. I also temporarily replaced the later tools with functions that would raise an error; the no-results path completed without calling them.I also added `tests/test_agent.py` to verify the Groq JSON parsing path, the regex fallback path, the no-results early return, and exact state handoff between `search_listings()`, `suggest_outfit()`, and `create_fit_card()`.
