@@ -13,6 +13,7 @@ Tools:
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -35,6 +36,11 @@ def _get_groq_client():
 
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
+
+def _tokenize_size(size_str: str) -> list[str]:
+    """Split a size string into normalized tokens, keeping decimals (e.g. '8.5') intact."""
+    return re.findall(r"\d+\.\d+|[a-z0-9]+", size_str.lower())
+
 
 def search_listings(
     description: str,
@@ -69,8 +75,42 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    listings = load_listings()
+
+    filtered = []
+    for item in listings:
+        if max_price is not None and item["price"] > max_price:
+            continue
+        if size is not None:
+            requested_tokens = set(_tokenize_size(size))
+            listing_size_tokens = set(_tokenize_size(item.get("size", "")))
+            if not requested_tokens or not requested_tokens.issubset(listing_size_tokens):
+                continue
+        filtered.append(item)
+
+    query_keywords = set(re.findall(r"[a-z0-9]+", description.lower()))
+    if not query_keywords:
+        return []
+
+    scored = []
+    for item in filtered:
+        searchable_parts = [
+            item.get("title") or "",
+            item.get("description") or "",
+            item.get("category") or "",
+            " ".join(item.get("style_tags") or []),
+            " ".join(item.get("colors") or []),
+            item.get("brand") or "",
+        ]
+        searchable_text = " ".join(searchable_parts).lower()
+        item_words = set(re.findall(r"[a-z0-9]+", searchable_text))
+
+        if query_keywords.issubset(item_words):
+            score = len(query_keywords)
+            scored.append((score, item))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in scored]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
